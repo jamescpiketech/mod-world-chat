@@ -1,313 +1,241 @@
-/*
-<--------------------------------------------------------------------------->
-- Developer(s): WiiZZy
-- Complete: 100%
-- ScriptName: 'World chat'
-- Comment: Fully tested
-<--------------------------------------------------------------------------->
-*/
-
 #include "ScriptMgr.h"
-#include "Log.h"
 #include "Player.h"
 #include "Channel.h"
+#include "ChannelMgr.h"
 #include "Chat.h"
 #include "Common.h"
-#include "WorldSessionMgr.h"
+#include "WorldSession.h"
+#include "World.h"
 #include "Config.h"
+#include "ChatCommand.h"
+#include "Language.h"
+#include "Log.h"
+#include "ObjectAccessor.h"
+#include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <unordered_map>
-
-#if AC_COMPILER == AC_COMPILER_GNU
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
-/* VERSION */
-float ver = 2.0f;
-
-/* Colors */
-std::string WORLD_CHAT_ALLIANCE_BLUE = "|cff3399FF";
-std::string WORLD_CHAT_HORDE_RED = "|cffCC0000";
-std::string WORLD_CHAT_WHITE = "|cffFFFFFF";
-std::string WORLD_CHAT_GREEN = "|cff00CC00";
-std::string WORLD_CHAT_RED = "|cffFF0000";
-std::string WORLD_CHAT_BLUE = "|cff6666FF";
-std::string WORLD_CHAT_BLACK = "|cff000000";
-std::string WORLD_CHAT_GREY = "|cff808080";
-
-/* Class Colors */
-std::string world_chat_ClassColor[11] =
-{
-    "|cffC79C6E", // WARRIOR
-    "|cffF58CBA", // PALADIN
-    "|cffABD473", // HUNTER
-    "|cffFFF569", // ROGUE
-    "|cffFFFFFF", // PRIEST
-    "|cffC41F3B", // DEATHKNIGHT
-    "|cff0070DE", // SHAMAN
-    "|cff40C7EB", // MAGE
-    "|cff8787ED", // WARLOCK
-    "", // ADDED IN MOP FOR MONK - NOT USED
-    "|cffFF7D0A", // DRUID
-};
-
-/* Ranks */
-std::string world_chat_GM_RANKS[4] =
-{
-    "Player",
-    "MOD",
-    "GM",
-    "ADMIN",
-};
-
-/* BLIZZARD CHAT ICON FOR GM'S */
-std::string world_chat_GMIcon = "|TINTERFACE/CHATFRAME/UI-CHATICON-BLIZZ:13:13:0:-1|t";
-
-/* COLORED TEXT FOR CURRENT FACTION || NOT FOR GMS */
-std::string world_chat_TeamIcon[2] =
-{
-    "|cff3399FFAlliance|r",
-    "|cffCC0000Horde|r"
-};
-
-/* Config Variables */
-struct WCConfig
-{
-    bool Enabled;
-    std::string ChannelName;
-    bool LoginState;
-    bool CrossFaction;
-    bool Announce;
-};
-
-WCConfig WC_Config;
-
-class WorldChat_Config : public WorldScript
-{
-public: WorldChat_Config() : WorldScript("WorldChat_Config") { };
-    void OnBeforeConfigLoad(bool reload) override
-    {
-        if (!reload) {
-            WC_Config.Enabled = sConfigMgr->GetOption<bool>("World_Chat.Enable", true);
-            WC_Config.ChannelName = sConfigMgr->GetOption<std::string>("World_Chat.ChannelName", "World");
-            WC_Config.LoginState = sConfigMgr->GetOption<bool>("World_Chat.OnLogin.State", true);
-            WC_Config.CrossFaction = sConfigMgr->GetOption<bool>("World_Chat.CrossFactions", true);
-            WC_Config.Announce = sConfigMgr->GetOption<bool>("World_Chat.Announce", true);
-        }
-    }
-};
-
-/* STRUCTURE FOR WorldChat map */
-struct ChatElements
-{
-    uint8 chat = (WC_Config.LoginState) ? 1 : 0; // CHAT DISABLED BY DEFAULT
-};
-
-/* UNORDERED MAP FOR STORING IF CHAT IS ENABLED OR DISABLED */
-std::unordered_map<uint32, ChatElements>WorldChat;
-
-void SendWorldMessage(Player* sender, const std::string msg, int team) {
-
-    if (!WC_Config.Enabled)
-    {
-        ChatHandler(sender->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat System is disabled.|r", WORLD_CHAT_RED));
-        return;
-    }
-
-    if (!sender->CanSpeak())
-    {
-        ChatHandler(sender->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}You can't use World Chat while muted!|r", WORLD_CHAT_RED));
-        return;
-    }
-
-    if (!WorldChat[sender->GetGUID().GetCounter()].chat)
-    {
-        ChatHandler(sender->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat is hidden. (.chat off)|r", WORLD_CHAT_RED));
-        return;
-    }
-
-    std::string message;
-
-    WorldSessionMgr::SessionMap sessions = sWorldSessionMgr->GetAllSessions();
-
-    for (WorldSessionMgr::SessionMap::iterator itr = sessions.begin(); itr != sessions.end(); ++itr)
-    {
-        if (!itr->second)
-        {
-            continue;
-        }
-
-        if (!itr->second->GetPlayer())
-        {
-            continue;
-        }
-
-        if (!itr->second->GetPlayer()->IsInWorld())
-        {
-            continue;
-        }
-
-        Player* target = itr->second->GetPlayer();
-        uint64 guid2 = target->GetGUID().GetCounter();
-
-        if (WorldChat[guid2].chat == 1 && (team == -1 || target->GetTeamId() == team))
-        {
-            if (WC_Config.CrossFaction || (sender->GetTeamId() == target->GetTeamId()) || target->GetSession()->GetSecurity())
-            {
-                if (sender->isGMChat())
-                {
-                    message = Acore::StringFormat("[World][{}][{}|Hplayer:{}|h{}|h|r]: {}{}|r", ((sender->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_DEVELOPER)) ? (world_chat_ClassColor[5] + "DEV|r") : world_chat_GMIcon) , world_chat_ClassColor[sender->getClass() - 1], sender->GetName(), sender->GetName(), WORLD_CHAT_WHITE, msg);
-                }
-                else
-                {
-                    message =  Acore::StringFormat("[World][{}][{}|Hplayer:{}|h{}|h|r]: {}{}|r", world_chat_TeamIcon[sender->GetTeamId()], world_chat_ClassColor[sender->getClass() - 1], sender->GetName(), sender->GetName(), WORLD_CHAT_WHITE, msg);
-                }
-                ChatHandler(target->GetSession()).PSendSysMessage(Acore::StringFormat("{}", message));
-            }
-        }
-    }
-}
 
 using namespace Acore::ChatCommands;
 
-class World_Chat : public CommandScript
+struct WCConfig
+{
+    bool Enabled = true;
+    std::string ChannelName = "Global";
+    bool CrossFactions = true;
+    bool Announce = true;
+};
+
+static WCConfig WC_Config;
+
+static inline std::string ToUpper(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::toupper(c); });
+    return s;
+}
+
+static bool SameTeamOrCross(Player* from, Player* to)
+{
+    if (!from || !to)
+        return false;
+    if (WC_Config.CrossFactions)
+        return true;
+    return from->GetTeamId() == to->GetTeamId();
+}
+
+static inline char const* FactionTag(Player* p)
+{
+    return (p->GetTeamId() == TEAM_ALLIANCE)
+        ? "|cff3399FF[A]|r "
+        : "|cffff0000[H]|r ";
+}
+
+static inline char const* FactionTagPlain(Player* p)
+{
+    return (p->GetTeamId() == TEAM_ALLIANCE) ? "[A] " : "[H] ";
+}
+
+static inline char const* ClassColor(Player* p)
+{
+    switch (p->getClass())
+    {
+        case CLASS_WARRIOR:      return "|cffC79C6E";
+        case CLASS_PALADIN:      return "|cffF58CBA";
+        case CLASS_HUNTER:       return "|cffABD473";
+        case CLASS_ROGUE:        return "|cffFFF569";
+        case CLASS_PRIEST:       return "|cffFFFFFF";
+        case CLASS_DEATH_KNIGHT: return "|cffC41E3A";
+        case CLASS_SHAMAN:       return "|cff0070DE";
+        case CLASS_MAGE:         return "|cff69CCF0";
+        case CLASS_WARLOCK:      return "|cff9482C9";
+        case CLASS_DRUID:        return "|cffFF7D0A";
+        default:                 return "|cffffffff";
+    }
+}
+
+static void SendWorldMessage(Player* sender, std::string const& text)
+{
+    if (!WC_Config.Enabled || !sender || !sender->GetSession())
+        return;
+
+    // Colored line for in-game
+    std::string coloredLine = std::string("|cffffd000[") + WC_Config.ChannelName + "]|r "
+        + FactionTag(sender)
+        + ClassColor(sender) + sender->GetName() + "|r: "
+        + text;
+
+    // Plaintext line for console/log
+    std::string plainLine = std::string("[") + WC_Config.ChannelName + "] "
+        + FactionTagPlain(sender)
+        + sender->GetName() + ": "
+        + text;
+
+    LOG_INFO("server", "{}", plainLine);
+
+    auto const& players = ObjectAccessor::GetPlayers();
+    for (auto const& pair : players)
+    {
+        Player* recv = pair.second;
+        if (!recv || !recv->IsInWorld())
+            continue;
+        if (!SameTeamOrCross(sender, recv))
+            continue;
+
+        ChatHandler(recv->GetSession()).SendSysMessage(coloredLine.c_str());
+    }
+}
+
+/* -------- Delayed Login Announcement -------- */
+static std::unordered_map<ObjectGuid, uint32> g_loginAnnounceRemainMs;
+
+class WorldChat_AnnounceDelay : public WorldScript
 {
 public:
-    World_Chat() : CommandScript("World_Chat") { }
+    WorldChat_AnnounceDelay() : WorldScript("WorldChat_AnnounceDelay") { }
 
-    static bool HandleWorldChatCommand(ChatHandler * pChat, const char * msg)
+    void OnUpdate(uint32 diff) override
     {
+        if (g_loginAnnounceRemainMs.empty())
+            return;
 
-        if (!*msg)
+        for (auto it = g_loginAnnounceRemainMs.begin(); it != g_loginAnnounceRemainMs.end(); )
         {
-            return false;
+            ObjectGuid guid = it->first;
+            uint32& remain = it->second;
+
+            if (remain <= diff)
+            {
+                if (Player* p = ObjectAccessor::FindPlayer(guid))
+                {
+                    ChatHandler(p->GetSession()).SendSysMessage("[Global Chat] Type \"/join Global\" to talk to all players on the server regardless of faction.");
+                }
+                it = g_loginAnnounceRemainMs.erase(it);
+                continue;
+            }
+
+            remain -= diff;
+            ++it;
         }
-
-        SendWorldMessage(pChat->GetSession()->GetPlayer(), msg, -1);
-
-        return true;
     }
+};
+/* ------------------------------------------- */
 
-    static bool HandleWorldChatHordeCommand(ChatHandler * pChat, const char * msg)
+class WorldChat_Config : public WorldScript
+{
+public:
+    WorldChat_Config() : WorldScript("WorldChat_Config") { }
+
+    void OnAfterConfigLoad(bool /*reload*/) override
     {
-
-        if (!*msg)
-        {
-            return false;
-        }
-
-        SendWorldMessage(pChat->GetSession()->GetPlayer(), msg, TEAM_HORDE);
-
-        return true;
-    }
-
-    static bool HandleWorldChatAllianceCommand(ChatHandler * pChat, const char * msg)
-    {
-
-        if (!*msg)
-        {
-            return false;
-        }
-
-        SendWorldMessage(pChat->GetSession()->GetPlayer(), msg, TEAM_ALLIANCE);
-
-        return true;
-    }
-
-    static bool HandleWorldChatOnCommand(ChatHandler* handler, const char* /*msg*/)
-    {
-        Player* player = handler->GetSession()->GetPlayer();
-        uint64 guid = player->GetGUID().GetCounter();
-
-        if (!WC_Config.Enabled) {
-            ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat System is disabled.|r", WORLD_CHAT_RED));
-            return true;
-        }
-
-        if (WorldChat[guid].chat) {
-            ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat is already visible.|r", WORLD_CHAT_RED));
-            return true;
-        }
-
-        WorldChat[guid].chat = 1;
-
-        ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat is now visible.|r", WORLD_CHAT_GREEN));
-
-        return true;
-    };
-
-    static bool HandleWorldChatOffCommand(ChatHandler* handler, const char* /*msg*/)
-    {
-        Player* player = handler->GetSession()->GetPlayer();
-        uint64 guid = player->GetGUID().GetCounter();
-
-        if (!sConfigMgr->GetOption<bool>("World_Chat.Enable", true))
-        {
-            ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat System is disabled.|r", WORLD_CHAT_RED));
-            return true;
-        }
-
-        if (!WorldChat[guid].chat)
-        {
-            ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat is already hidden.|r", WORLD_CHAT_RED));
-            return true;
-        }
-
-        WorldChat[guid].chat = 0;
-
-        ChatHandler(player->GetSession()).PSendSysMessage(Acore::StringFormat("[WC] {}World Chat is now hidden.|r", WORLD_CHAT_GREEN));
-
-        return true;
-    };
-
-    ChatCommandTable GetCommands() const override
-    {
-        static ChatCommandTable wcCommandTable =
-        {
-            { "on",      HandleWorldChatOnCommand, SEC_PLAYER, Console::No },
-            { "off",     HandleWorldChatOffCommand, SEC_PLAYER, Console::No },
-            { "",        HandleWorldChatCommand, SEC_PLAYER, Console::No },
-        };
-
-        static ChatCommandTable commandTable =
-        {
-            { "chat", wcCommandTable },
-            { "chath", HandleWorldChatHordeCommand, SEC_MODERATOR, Console::Yes},
-            { "chata", HandleWorldChatAllianceCommand, SEC_MODERATOR, Console::Yes},
-        };
-
-        return commandTable;
-
+        WC_Config.Enabled       = sConfigMgr->GetOption<bool>("World_Chat.Enable", true);
+        WC_Config.ChannelName   = sConfigMgr->GetOption<std::string>("World_Chat.ChannelName", "Global");
+        WC_Config.CrossFactions = sConfigMgr->GetOption<bool>("World_Chat.CrossFactions", true);
+        WC_Config.Announce      = sConfigMgr->GetOption<bool>("World_Chat.Announce", true);
     }
 };
 
-class WorldChat_Announce : public PlayerScript
+class world_chat_commands : public CommandScript
 {
 public:
+    world_chat_commands() : CommandScript("world_chat_commands") { }
 
-    WorldChat_Announce() : PlayerScript("WorldChat_Announce") {}
-
-    void OnPlayerLogin(Player* player)
+    static bool HandleWorldChatCommand(ChatHandler* handler, Tail msgTail)
     {
-        // Announce Module
-        if (WC_Config.Enabled && WC_Config.Announce)
+        if (!WC_Config.Enabled)
+            return true;
+
+        Player* sender = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!sender)
+            return true;
+
+        std::string msg = std::string(msgTail);
+        while (!msg.empty() && std::isspace(static_cast<unsigned char>(msg.front())))
+            msg.erase(msg.begin());
+
+        if (msg.empty())
         {
-            ChatHandler(player->GetSession()).SendSysMessage(("This server is running the |cff4CFF00WorldChat |rmodule. Use .chat" + ((WC_Config.ChannelName != "") ? " or use /join " + WC_Config.ChannelName : "") + " to communicate"+ ((!WC_Config.CrossFaction) ? " with your faction." : ".")));
+            handler->PSendSysMessage("Usage: .chat <message>");
+            return true;
         }
+
+        SendWorldMessage(sender, msg);
+        return true;
+    }
+
+    ChatCommandTable GetCommands() const
+    {
+        static ChatCommandTable table
+        {
+            { "chat", HandleWorldChatCommand, SEC_PLAYER, Console::No }
+        };
+        return table;
+    }
+};
+
+class WorldChat_Player : public PlayerScript
+{
+public:
+    WorldChat_Player() : PlayerScript("WorldChat_Player") { }
+
+    void OnLogin(Player* player)
+    {
+        if (!player)
+            return;
+
+        // Schedule a one-time announcement 10 seconds after login
+        g_loginAnnounceRemainMs[player->GetGUID()] = 10000;
+    }
+
+    void OnLogout(Player* player)
+    {
+        if (!player)
+            return;
+        g_loginAnnounceRemainMs.erase(player->GetGUID());
     }
 
     void OnPlayerChat(Player* player, uint32 /*type*/, uint32 lang, std::string& msg, Channel* channel)
     {
-        if (WC_Config.ChannelName != "" && lang != LANG_ADDON && channel->GetName() == WC_Config.ChannelName)
-        {
-            SendWorldMessage(player, msg, -1);
-            msg = -1;
-        }
+        if (!WC_Config.Enabled || !player || !channel)
+            return;
+
+        if (lang == LANG_ADDON)
+            return;
+
+        if (WC_Config.ChannelName.empty())
+            return;
+
+        if (ToUpper(channel->GetName()) != ToUpper(WC_Config.ChannelName))
+            return;
+
+        SendWorldMessage(player, msg);
+        msg.clear();
     }
 };
 
 void AddSC_WorldChatScripts()
 {
-    new WorldChat_Announce();
     new WorldChat_Config();
-    new World_Chat();
+    new world_chat_commands();
+    new WorldChat_Player();
+    new WorldChat_AnnounceDelay();
 }
