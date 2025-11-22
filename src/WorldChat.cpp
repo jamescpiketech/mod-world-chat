@@ -55,6 +55,13 @@ static inline char const* FactionTagPlain(Player* p)
     return (p->GetTeamId() == TEAM_ALLIANCE) ? "[A] " : "[H] ";
 }
 
+static inline char const* FactionColor(Player* p)
+{
+    return (p->GetTeamId() == TEAM_ALLIANCE)
+        ? "|cff3399FF"
+        : "|cffff0000";
+}
+
 static inline char const* ClassColor(Player* p)
 {
     switch (p->getClass())
@@ -82,7 +89,7 @@ static void SendWorldMessage(Player* sender, std::string const& text)
     std::string coloredLine = std::string("|cffffd000[") + WC_Config.ChannelName + "]|r "
         + FactionTag(sender)
         + ClassColor(sender) + sender->GetName() + "|r: "
-        + text;
+        + FactionColor(sender) + text + "|r";
 
     // Plaintext line for console/log
     std::string plainLine = std::string("[") + WC_Config.ChannelName + "] "
